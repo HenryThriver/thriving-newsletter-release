@@ -1,5 +1,5 @@
 name: Schedule protected newsletter
-run-name: Release ${{ inputs.edition_key }} for ${{ inputs.schedule_at }}
+run-name: Release ${{ inputs.edition_key }} for ${{ inputs.schedule_at }} (${{ inputs.expected_effective_recipients }} expected recipients)
 
 on:
   workflow_dispatch:
@@ -29,6 +29,10 @@ on:
         description: Future ISO timestamp with timezone, for example 2026-07-23T10:00:00-07:00
         required: true
         type: string
+      expected_effective_recipients:
+        description: Henry's dispatch-time expected effective audience; the live count must remain within 15%
+        required: true
+        type: number
 
 permissions:
   contents: read
@@ -51,6 +55,7 @@ jobs:
       EDITION_KEY: ${{ inputs.edition_key }}
       CONTENT_SHA256: ${{ inputs.content_sha256 }}
       SCHEDULE_AT: ${{ inputs.schedule_at }}
+      EXPECTED_EFFECTIVE_RECIPIENTS: ${{ inputs.expected_effective_recipients }}
       RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
       NEWSLETTER_APPROVAL_SECRET: ${{ secrets.NEWSLETTER_APPROVAL_SECRET }}
       RESEND_SEGMENT_CONFIRMED_ID: ${{ vars.RESEND_SEGMENT_CONFIRMED_ID }}
@@ -63,6 +68,7 @@ jobs:
           [[ "$THRIVING_WEBSITE_RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           [[ "$EDITION_KEY" =~ ^thriving-with-ai-edition-[0-9]{3}$ ]]
           [[ "$CONTENT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$EXPECTED_EFFECTIVE_RECIPIENTS" =~ ^[1-9][0-9]*$ ]]
           [[ "$SOURCE_PATH" =~ ^src/content/newsletter/[A-Za-z0-9._/-]+\.mdx$ ]]
           [[ "$SEED_RECEIPT_PATH" =~ ^scripts/newsletter/seed-receipts/[A-Za-z0-9._/-]+\.json$ ]]
           [[ "$SOURCE_PATH" != *".."* ]]
@@ -114,6 +120,7 @@ jobs:
             --approve-content-sha256 "$CONTENT_SHA256" \
             --approved-seed-receipt "$SEED_RECEIPT_PATH" \
             --schedule-at "$SCHEDULE_AT" \
+            --expected-effective-recipients "$EXPECTED_EFFECTIVE_RECIPIENTS" \
             --confirm-gmail-seen \
             --confirm-th-inbox-seen \
             --output "$approval_path" >"$log_path" 2>&1
@@ -124,6 +131,7 @@ jobs:
             --confirm-edition "$EDITION_KEY" \
             --approval-receipt "$approval_path" \
             --schedule-at "$SCHEDULE_AT" \
+            --expected-effective-recipients "$EXPECTED_EFFECTIVE_RECIPIENTS" \
             --approve-content-sha256 "$CONTENT_SHA256" \
             --approved-seed-receipt "$SEED_RECEIPT_PATH" >>"$log_path" 2>&1
 
