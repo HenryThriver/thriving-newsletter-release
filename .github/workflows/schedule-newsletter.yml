@@ -1,0 +1,148 @@
+name: Schedule protected newsletter
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_commit:
+        description: Exact 40-character commit from the private website repository
+        required: true
+        type: string
+      edition_key:
+        description: Edition key, for example thriving-with-ai-edition-002
+        required: true
+        type: string
+      source_path:
+        description: Newsletter source path in the private repository
+        required: true
+        default: src/content/newsletter/twa-002.mdx
+        type: string
+      seed_receipt_path:
+        description: Committed final seed receipt path in the private repository
+        required: true
+        type: string
+      content_sha256:
+        description: Approved content SHA-256 from the final seed receipt
+        required: true
+        type: string
+      schedule_at:
+        description: Future ISO timestamp with timezone, for example 2026-07-23T10:00:00-07:00
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: newsletter-production
+  cancel-in-progress: false
+
+jobs:
+  schedule:
+    name: Henry-approved schedule
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: newsletter-production
+    env:
+      NEWSLETTER_RELEASE_ENVIRONMENT: newsletter-production
+      THRIVING_WEBSITE_RELEASE_COMMIT: ${{ inputs.release_commit }}
+      SOURCE_PATH: ${{ inputs.source_path }}
+      SEED_RECEIPT_PATH: ${{ inputs.seed_receipt_path }}
+      EDITION_KEY: ${{ inputs.edition_key }}
+      CONTENT_SHA256: ${{ inputs.content_sha256 }}
+      SCHEDULE_AT: ${{ inputs.schedule_at }}
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      NEWSLETTER_APPROVAL_SECRET: ${{ secrets.NEWSLETTER_APPROVAL_SECRET }}
+      RESEND_SEGMENT_CONFIRMED_ID: ${{ vars.RESEND_SEGMENT_CONFIRMED_ID }}
+      RESEND_TOPIC_GENERAL_ID: ${{ vars.RESEND_TOPIC_GENERAL_ID }}
+    steps:
+      - name: Validate immutable release inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$THRIVING_WEBSITE_RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EDITION_KEY" =~ ^thriving-with-ai-edition-[0-9]{3}$ ]]
+          [[ "$CONTENT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$SOURCE_PATH" =~ ^src/content/newsletter/[A-Za-z0-9._/-]+\.mdx$ ]]
+          [[ "$SEED_RECEIPT_PATH" =~ ^scripts/newsletter/seed-receipts/[A-Za-z0-9._/-]+\.json$ ]]
+          [[ "$SOURCE_PATH" != *".."* ]]
+          [[ "$SEED_RECEIPT_PATH" != *".."* ]]
+
+      - name: Check out exact private release commit
+        uses: actions/checkout@v4
+        with:
+          repository: HenryThriver/thriving-henry-website
+          ref: ${{ inputs.release_commit }}
+          path: private-site
+          ssh-key: ${{ secrets.THRIVING_WEBSITE_DEPLOY_KEY }}
+          persist-credentials: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: private-site/package.json
+          cache: npm
+          cache-dependency-path: private-site/package-lock.json
+
+      - name: Install locked dependencies
+        working-directory: private-site
+        run: npm ci --ignore-scripts
+
+      - name: Verify release code and exact newsletter package
+        working-directory: private-site
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run test:newsletter
+          test "$(git rev-parse HEAD)" = "$THRIVING_WEBSITE_RELEASE_COMMIT"
+          test -f "$SOURCE_PATH"
+          test -f "$SEED_RECEIPT_PATH"
+
+      - name: Record protected approval and schedule exact tested edition
+        id: schedule
+        working-directory: private-site
+        shell: bash
+        run: |
+          set -euo pipefail
+          approval_path="scripts/newsletter/approvals/${EDITION_KEY}.${CONTENT_SHA256:0:16}.json"
+          log_path="$RUNNER_TEMP/newsletter-schedule.log"
+          trap 'rm -f "$log_path"' EXIT
+
+          npm run newsletter:approve -- \
+            --source "$SOURCE_PATH" \
+            --approve-edition "$EDITION_KEY" \
+            --approve-content-sha256 "$CONTENT_SHA256" \
+            --approved-seed-receipt "$SEED_RECEIPT_PATH" \
+            --schedule-at "$SCHEDULE_AT" \
+            --confirm-gmail-seen \
+            --confirm-th-inbox-seen \
+            --output "$approval_path" >"$log_path" 2>&1
+
+          npm run newsletter:dry-run -- \
+            --source "$SOURCE_PATH" \
+            --send \
+            --confirm-edition "$EDITION_KEY" \
+            --approval-receipt "$approval_path" \
+            --schedule-at "$SCHEDULE_AT" \
+            --approve-content-sha256 "$CONTENT_SHA256" \
+            --approved-seed-receipt "$SEED_RECEIPT_PATH" >>"$log_path" 2>&1
+
+          echo "approval_path=$approval_path" >> "$GITHUB_OUTPUT"
+          echo "receipt_path=scripts/newsletter/receipts/${EDITION_KEY}.json" >> "$GITHUB_OUTPUT"
+          echo "Newsletter scheduled from the exact approved private commit."
+
+      - name: Preserve private approval and schedule receipts
+        working-directory: private-site
+        shell: bash
+        env:
+          APPROVAL_PATH: ${{ steps.schedule.outputs.approval_path }}
+          RECEIPT_PATH: ${{ steps.schedule.outputs.receipt_path }}
+        run: |
+          set -euo pipefail
+          receipt_branch="newsletter-receipt/${EDITION_KEY}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git config user.name "thriving-newsletter-release[bot]"
+          git config user.email "thriving-newsletter-release[bot]@users.noreply.github.com"
+          git switch -c "$receipt_branch"
+          git add -f "$APPROVAL_PATH" "$RECEIPT_PATH"
+          git commit -m "newsletter: record ${EDITION_KEY} protected schedule"
+          git push origin "HEAD:refs/heads/$receipt_branch"
+          echo "Private receipt branch created: $receipt_branch" >> "$GITHUB_STEP_SUMMARY"
