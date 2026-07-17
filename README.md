@@ -30,6 +30,19 @@ In plain English: agents can prepare the package, but Henry has the red button.
 - It does not let an ordinary agent session read the production sending key.
 - It does not replace the private editorial and testing workflow.
 
+## Kit reminder audience
+
+The repository also owns one bounded, protected audience-preparation workflow
+for the final 2026 re-permission reminder. It computes the active Kit cohort
+minus contacts currently confirmed and opted in on Resend, then synchronizes a
+dedicated Kit tag. Subscriber addresses exist only in runner memory; the
+workflow retains aggregate counts. Run it once to prepare the tag and again
+immediately before scheduling so late conversions are excluded.
+
+This workflow never creates, schedules, or sends a broadcast. The campaign
+still requires a rendered seed, an exact recipient-count review, and Henry
+approval after testing.
+
 ## Release outline
 
 1. Finish the edition in the private website repository.
