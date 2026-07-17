@@ -1,0 +1,81 @@
+name: Prepare protected Kit reminder audience
+run-name: ${{ inputs.apply_changes && 'Sync' || 'Preview' }} Kit reminder audience (${{ inputs.expected_eligible_recipients }} expected)
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply_changes:
+        description: Create and synchronize the Kit tag; false is aggregate-only preview
+        required: true
+        default: false
+        type: boolean
+      expected_eligible_recipients:
+        description: Expected eligible count; 0 allows the first preview to establish it
+        required: true
+        default: 0
+        type: number
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kit-last-chance-audience
+  cancel-in-progress: false
+
+jobs:
+  audience:
+    name: Henry-approved audience sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: newsletter-production
+    env:
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      KIT_API_KEY: ${{ secrets.KIT_API_KEY }}
+      RESEND_SEGMENT_CONFIRMED_ID: ${{ vars.RESEND_SEGMENT_CONFIRMED_ID }}
+      RESEND_TOPIC_GENERAL_ID: ${{ vars.RESEND_TOPIC_GENERAL_ID }}
+    steps:
+      - name: Check out audience code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Verify audience exclusion behavior
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Preview or synchronize the dedicated Kit tag
+        id: audience
+        shell: bash
+        env:
+          APPLY_CHANGES: ${{ inputs.apply_changes }}
+          EXPECTED_ELIGIBLE: ${{ inputs.expected_eligible_recipients }}
+        run: |
+          set -euo pipefail
+          args=(--output "$RUNNER_TEMP/kit-audience-receipt.json")
+          if [[ "$APPLY_CHANGES" == "true" ]]; then
+            args+=(--apply)
+          fi
+          if [[ "$EXPECTED_ELIGIBLE" =~ ^[1-9][0-9]*$ ]]; then
+            args+=(--expected-eligible "$EXPECTED_ELIGIBLE")
+          elif [[ "$EXPECTED_ELIGIBLE" != "0" ]]; then
+            echo "expected_eligible_recipients must be a non-negative integer" >&2
+            exit 1
+          fi
+          python3 scripts/prepare_kit_reminder_audience.py "${args[@]}"
+
+      - name: Publish aggregate receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          receipt="$RUNNER_TEMP/kit-audience-receipt.json"
+          jq -e '(.schemaVersion == "kit-reminder-audience-receipt/v1") and ((tostring | contains("@")) | not)' "$receipt" >/dev/null
+          {
+            echo "## Kit reminder audience"
+            echo
+            echo "- Mode: $(jq -r .mode "$receipt")"
+            echo "- Active Kit subscribers: $(jq -r .activeKitSubscribers "$receipt")"
+            echo "- Confirmed Resend subscribers: $(jq -r .confirmedResendSubscribers "$receipt")"
+            echo "- Kit/Resend overlap excluded: $(jq -r .overlapExcluded "$receipt")"
+            echo "- Eligible reminder recipients: $(jq -r .eligibleRecipients "$receipt")"
+            echo "- Newly tagged: $(jq -r .taggedNow "$receipt")"
+            echo "- Removed from tag: $(jq -r .untaggedNow "$receipt")"
+            echo
+            echo "No subscriber addresses were written to the log or retained as an artifact."
+          } >> "$GITHUB_STEP_SUMMARY"
