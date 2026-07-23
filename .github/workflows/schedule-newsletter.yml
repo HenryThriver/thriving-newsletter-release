@@ -74,6 +74,16 @@ jobs:
           [[ "$SOURCE_PATH" != *".."* ]]
           [[ "$SEED_RECEIPT_PATH" != *".."* ]]
 
+      - name: Check out release guardrails
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: release-switchboard
+          persist-credentials: false
+
+      - name: Preflight protected Resend credential
+        working-directory: release-switchboard
+        run: python3 scripts/preflight_resend_credential.py
+
       - name: Check out exact private release commit
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
