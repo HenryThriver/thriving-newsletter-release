@@ -114,7 +114,18 @@ jobs:
           log_path="$RUNNER_TEMP/newsletter-schedule.log"
           trap 'rm -f "$log_path"' EXIT
 
-          npm run newsletter:approve -- \
+          report_failure() {
+            local phase=$1
+            echo "::error::Newsletter ${phase} failed. Sanitized private-site output follows." >&2
+            sed -E \
+              -e 's/[[:alnum:]._%+-]+@[[:alnum:].-]+\.[[:alpha:]]{2,}/[redacted-email]/g' \
+              -e 's/[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}/[redacted-id]/g' \
+              -e 's/[0-9a-fA-F]{64}/[redacted-sha256]/g' \
+              -e 's/(re_|sk_)[[:alnum:]_-]+/[redacted-token]/g' \
+              "$log_path" | tail -n 20 >&2
+          }
+
+          if ! npm run newsletter:approve -- \
             --source "$SOURCE_PATH" \
             --approve-edition "$EDITION_KEY" \
             --approve-content-sha256 "$CONTENT_SHA256" \
@@ -123,9 +134,12 @@ jobs:
             --expected-effective-recipients "$EXPECTED_EFFECTIVE_RECIPIENTS" \
             --confirm-gmail-seen \
             --confirm-th-inbox-seen \
-            --output "$approval_path" >"$log_path" 2>&1
+            --output "$approval_path" >"$log_path" 2>&1; then
+            report_failure "approval creation"
+            exit 1
+          fi
 
-          npm run newsletter:dry-run -- \
+          if ! npm run newsletter:dry-run -- \
             --source "$SOURCE_PATH" \
             --send \
             --confirm-edition "$EDITION_KEY" \
@@ -133,7 +147,10 @@ jobs:
             --schedule-at "$SCHEDULE_AT" \
             --expected-effective-recipients "$EXPECTED_EFFECTIVE_RECIPIENTS" \
             --approve-content-sha256 "$CONTENT_SHA256" \
-            --approved-seed-receipt "$SEED_RECEIPT_PATH" >>"$log_path" 2>&1
+            --approved-seed-receipt "$SEED_RECEIPT_PATH" >>"$log_path" 2>&1; then
+            report_failure "target verification or scheduling"
+            exit 1
+          fi
 
           echo "approval_path=$approval_path" >> "$GITHUB_OUTPUT"
           echo "receipt_path=scripts/newsletter/receipts/${EDITION_KEY}.json" >> "$GITHUB_OUTPUT"
